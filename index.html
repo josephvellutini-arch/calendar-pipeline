@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Calendar Pipeline</title>
+<meta name="description" content="Why and how a small system of scheduled agents, a Notion database, and a home calendar work together — and what it took to make it trustworthy.">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
+
+  :root {
+    --paper: #eef1f4;
+    --paper-raised: #ffffff;
+    --ink: #161c26;
+    --ink-soft: #4c5768;
+    --ink-faint: #7c8798;
+    --line: #d7dde4;
+    --line-strong: #b7c0cb;
+    --accent: #2f5fd6;
+    --accent-strong: #1f45a8;
+    --accent-tint: #e1e9fb;
+    --shadow: 0 1px 2px rgba(20,30,45,0.06), 0 8px 22px -10px rgba(20,30,45,0.16);
+
+    --sys-notion: #a3720f;
+    --sys-notion-tint: #f6ebd3;
+    --sys-google: #2f5fd6;
+    --sys-google-tint: #e1e9fb;
+    --sys-routine: #6d3fb0;
+    --sys-routine-tint: #ece2f7;
+    --sys-local: #1c7a5e;
+    --sys-local-tint: #dcf0e8;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #10141b; --paper-raised: #181f29; --ink: #e7ebf1; --ink-soft: #a7b2c2; --ink-faint: #778394;
+      --line: #29323e; --line-strong: #3a4552; --accent: #7ea2f5; --accent-strong: #a7c1fa; --accent-tint: #1c2740;
+      --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px -10px rgba(0,0,0,0.55);
+      --sys-notion: #d9a94a; --sys-notion-tint: #332a15; --sys-google: #7ea2f5; --sys-google-tint: #1c2740;
+      --sys-routine: #b696e6; --sys-routine-tint: #291f38; --sys-local: #5cc9a2; --sys-local-tint: #133226;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #10141b; --paper-raised: #181f29; --ink: #e7ebf1; --ink-soft: #a7b2c2; --ink-faint: #778394;
+    --line: #29323e; --line-strong: #3a4552; --accent: #7ea2f5; --accent-strong: #a7c1fa; --accent-tint: #1c2740;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px -10px rgba(0,0,0,0.55);
+    --sys-notion: #d9a94a; --sys-notion-tint: #332a15; --sys-google: #7ea2f5; --sys-google-tint: #1c2740;
+    --sys-routine: #b696e6; --sys-routine-tint: #291f38; --sys-local: #5cc9a2; --sys-local-tint: #133226;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    font-size: 17px; line-height: 1.65; -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent-strong); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:hover { color: var(--accent); }
+  h1, h2, h3 { font-family: 'IBM Plex Sans', sans-serif; font-weight: 600; line-height: 1.2; color: var(--ink); margin: 0; }
+  code, .mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
+  code { font-size: 0.88em; background: var(--paper); border: 1px solid var(--line); border-radius: 4px; padding: 0.1em 0.4em; }
+
+  .wrap { max-width: 760px; margin: 0 auto; padding: 0 24px; }
+
+  header.masthead { border-bottom: 1px solid var(--line); padding: 64px 0 40px; }
+  .eyebrow {
+    font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase;
+    color: var(--accent-strong); display: flex; align-items: center; gap: 10px; margin-bottom: 18px;
+  }
+  .eyebrow::before { content: ""; width: 20px; height: 1px; background: var(--accent-strong); }
+  h1.title { font-size: clamp(2rem, 5vw, 2.9rem); letter-spacing: -0.01em; }
+  .subtitle { margin-top: 16px; max-width: 56ch; font-size: 1.15rem; color: var(--ink-soft); }
+
+  main { padding: 8px 0 40px; }
+  section.part { padding: 56px 0 6px; }
+  section.part + section.part { border-top: 1px solid var(--line); }
+  .part-kicker { font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 10px; }
+  h2.part-title { font-size: clamp(1.5rem, 3vw, 1.9rem); margin-bottom: 6px; }
+  p { margin: 14px 0; max-width: 62ch; }
+  ul { margin: 14px 0; padding-left: 1.3em; max-width: 60ch; }
+  li { margin: 8px 0; }
+  strong { font-weight: 600; color: var(--ink); }
+
+  .principle { margin: 22px 0; padding: 18px 20px; border-left: 3px solid var(--accent); background: var(--paper-raised); border-radius: 0 8px 8px 0; box-shadow: var(--shadow); }
+  .principle h3 { font-size: 1.05rem; margin-bottom: 6px; }
+  .principle p { margin: 0; max-width: none; color: var(--ink-soft); }
+
+  figure { margin: 30px 0; }
+  figure.diagram { background: var(--paper-raised); border: 1px solid var(--line); border-radius: 12px; padding: 20px 20px 14px; box-shadow: var(--shadow); }
+  figure.diagram svg { display: block; width: 100%; height: auto; color: var(--ink); }
+  figcaption { margin-top: 12px; font-size: 0.9rem; color: var(--ink-soft); }
+
+  .tag { display: inline-block; font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; border-radius: 5px; padding: 2px 7px; }
+  .tag.notion { color: var(--sys-notion); background: var(--sys-notion-tint); }
+  .tag.google { color: var(--sys-google); background: var(--sys-google-tint); }
+  .tag.routine { color: var(--sys-routine); background: var(--sys-routine-tint); }
+  .tag.local { color: var(--sys-local); background: var(--sys-local-tint); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 24px; }
+  .chip { display: inline-flex; align-items: center; gap: 7px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 500; color: var(--ink-soft); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .dot.notion { background: var(--sys-notion); }
+  .dot.google { background: var(--sys-google); }
+  .dot.routine { background: var(--sys-routine); }
+  .dot.local { background: var(--sys-local); }
+
+  .lesson { display: grid; grid-template-columns: 28px 1fr; gap: 4px 14px; padding: 14px 0; border-top: 1px solid var(--line); }
+  .lesson:last-child { border-bottom: 1px solid var(--line); }
+  .lesson .num { font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--ink-faint); padding-top: 2px; }
+  .lesson h4 { margin: 0 0 4px; font-size: 1rem; font-weight: 700; }
+  .lesson p { margin: 0; max-width: 56ch; color: var(--ink-soft); }
+
+  footer { border-top: 1px solid var(--line); padding: 40px 0 60px; }
+  footer p { color: var(--ink-soft); max-width: 56ch; font-size: 0.95rem; }
+  footer .sig { margin-top: 14px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--ink-faint); }
+
+  @media (max-width: 560px) {
+    body { font-size: 16px; }
+    header.masthead { padding: 44px 0 30px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <div class="eyebrow">Personal infrastructure · notes</div>
+    <h1 class="title">The Calendar Pipeline</h1>
+    <p class="subtitle">A small system of scheduled agents, a database, and a real calendar — built to hold a demanding, irregular schedule without ever quietly getting it wrong.</p>
+    <div class="legend">
+      <span class="chip"><span class="dot notion"></span>Source of truth (database)</span>
+      <span class="chip"><span class="dot google"></span>Calendar &amp; email</span>
+      <span class="chip"><span class="dot routine"></span>Scheduled agents</span>
+      <span class="chip"><span class="dot local"></span>This machine</span>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+
+    <section class="part" id="why">
+      <div class="part-kicker">Why this exists</div>
+      <h2 class="part-title">A schedule that doesn't fit a normal calendar app</h2>
+      <p>I'm doing independent research and applying to PhD programs while also working an irregular shift job, and none of that runs on a tidy 9-to-5. Some mornings start at 4am. Some days need two hours of uninterrupted deep work and nothing else touches them. A recurring reading habit needs to survive weeks without turning into guilt. A read-later list needs an honest way to say "not right now" instead of silently growing forever.</p>
+      <p>A normal calendar app can hold fixed events fine. What it can't do is <em>reason</em> — decide what today should look like given yesterday's leftovers, this week's deadlines, and a work shift that starts at an hour most planning tools don't expect. That reasoning needed to happen somewhere, on a schedule, without me having to trigger it by hand every morning.</p>
+      <p>So the actual thing I built isn't a calendar. It's a small pipeline of agents that read my real calendars and inbox, propose a plan, and only ever touch the live calendar once I've said yes.</p>
+    </section>
+
+    <section class="part" id="philosophy">
+      <div class="part-kicker">Philosophy</div>
+      <h2 class="part-title">A few rules the whole system answers to</h2>
+      <p>None of these were decided up front. Each one is the direct result of something going wrong once, in a small, low-stakes way, and getting fixed before it became a habit of not trusting the system.</p>
+
+      <div class="principle">
+        <h3>Draft, never assume</h3>
+        <p>Every agent that plans a day, a week, or a month is only ever allowed to write a <em>draft</em>. Nothing reaches the real calendar until a human looks at it and explicitly approves it. An agent that's wrong about your schedule is a nuisance; an agent that's wrong and silently commits to your calendar is a liability. The fix is structural, not a prompt asking it to be careful.</p>
+      </div>
+
+      <div class="principle">
+        <h3>No memory, no drift</h3>
+        <p>Each scheduled run starts from zero — no memory of yesterday's run, no accumulated state to get subtly wrong over time. Everything it needs, it re-reads fresh from the same sources every time: the calendar, the inbox, the database. A bug in yesterday's output can't compound into next week's, because there's nothing to compound; everything is recomputed from the same ground truth every single time.</p>
+      </div>
+
+      <div class="principle">
+        <h3>One place holds the truth</h3>
+        <p>The database is the real record. The calendar is a projection of it — created only after approval, and only ever added to, never silently edited or deleted by anything automated. If the calendar and the database ever disagree, the database wins, because it's the only thing every agent actually reads and writes directly.</p>
+      </div>
+
+      <div class="principle">
+        <h3>"Not right now" has to be a real option</h3>
+        <p>Early on, a recurring to-do carried forward unresolved for over three weeks straight — not because it wasn't important, just because the only two states available were "done" or "still open," and there was no way to say "not today, ask me again later" without it either nagging forever or getting deleted and losing its history. The fix was a proper three-state system: doing, done, and paused-with-an-optional-return-date. Deferring something on purpose is not the same as ignoring it, and the system needed to know the difference.</p>
+      </div>
+
+      <div class="principle">
+        <h3>Prefer the platform's own reliable channel over a clever custom one</h3>
+        <p>The system went through two different custom notification setups before landing on the obvious answer: if you need someone to notice something changed, use the notification system already built into the app they check constantly — in this case, letting a calendar app's own native reminder do the job — rather than routing around it through a separate push service that can silently fail with no visible error. The fanciest bridge is still worse than the boring default that's already proven reliable.</p>
+      </div>
+    </section>
+
+    <section class="part" id="how">
+      <div class="part-kicker">How it works</div>
+      <h2 class="part-title">Four small agents, one shared record</h2>
+      <p>The architecture is intentionally boring. A handful of scheduled agents run on fixed timers, read from the same calendars and the same database every time, and write drafts. A human approval step is the only thing that ever lets a draft become a real event.</p>
+
+      <figure class="diagram">
+        <svg viewBox="0 0 900 460" role="img" aria-label="Diagram: scheduled agents read the calendar and email, write draft plans into a database, and once a person approves a draft, a separate hourly agent turns it into a real calendar event and clears the review reminder.">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor" />
+            </marker>
+          </defs>
+
+          <rect x="30" y="34" width="210" height="72" rx="8" fill="var(--sys-google-tint)" stroke="var(--sys-google)" stroke-width="1.5"/>
+          <text x="135" y="64" text-anchor="middle" font-size="13" font-weight="600" fill="var(--sys-google)">Calendar + Email</text>
+          <text x="135" y="82" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.75">existing events, upcoming</text>
+          <text x="135" y="96" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.75">shifts, relevant threads</text>
+
+          <rect x="360" y="20" width="230" height="150" rx="8" fill="var(--sys-routine-tint)" stroke="var(--sys-routine)" stroke-width="1.5"/>
+          <text x="475" y="44" text-anchor="middle" font-size="13" font-weight="600" fill="var(--sys-routine)">Scheduled Agents</text>
+          <text x="475" y="66" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.8">daily · weekly · monthly</text>
+          <text x="475" y="82" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.8">plus an hourly "apply" pass</text>
+          <text x="475" y="104" text-anchor="middle" font-size="10.5" font-weight="600" fill="currentColor" opacity="0.55">no memory between runs</text>
+          <text x="475" y="122" text-anchor="middle" font-size="10.5" font-weight="600" fill="currentColor" opacity="0.55">everything re-read fresh</text>
+
+          <rect x="690" y="10" width="210" height="120" rx="8" fill="var(--sys-notion-tint)" stroke="var(--sys-notion)" stroke-width="1.5"/>
+          <text x="795" y="34" text-anchor="middle" font-size="13" font-weight="600" fill="var(--sys-notion)">Database</text>
+          <text x="795" y="56" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.75">draft plans</text>
+          <text x="795" y="74" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.75">open / paused / done tasks</text>
+          <text x="795" y="100" text-anchor="middle" font-size="10.5" font-weight="600" fill="currentColor" opacity="0.6">single source of truth</text>
+
+          <rect x="360" y="390" width="230" height="60" rx="8" fill="var(--sys-google-tint)" stroke="var(--sys-google)" stroke-width="1.5"/>
+          <text x="475" y="416" text-anchor="middle" font-size="13" font-weight="600" fill="var(--sys-google)">Calendar event</text>
+          <text x="475" y="434" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.75">real, created after approval</text>
+
+          <rect x="30" y="390" width="230" height="60" rx="8" fill="var(--sys-local-tint)" stroke="var(--sys-local)" stroke-width="1.5"/>
+          <text x="145" y="416" text-anchor="middle" font-size="13" font-weight="600" fill="var(--sys-local)">Native reminder</text>
+          <text x="145" y="434" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.75">a real notification, no custom relay</text>
+
+          <rect x="690" y="390" width="210" height="60" rx="8" fill="var(--paper)" stroke="currentColor" stroke-width="1.5" opacity="0.9"/>
+          <text x="795" y="416" text-anchor="middle" font-size="13" font-weight="600" fill="currentColor">You</text>
+          <text x="795" y="434" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.75">approve, or don't</text>
+
+          <line x1="241" y1="70" x2="356" y2="70" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)"/>
+          <text x="298" y="60" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.8">reads</text>
+
+          <line x1="591" y1="70" x2="686" y2="55" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)"/>
+          <text x="645" y="52" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.8">drafts</text>
+
+          <path d="M 795 130 C 795 220, 750 300, 590 400" fill="none" stroke="var(--sys-google)" stroke-width="1.5" marker-end="url(#arrow)"/>
+          <text x="690" y="300" text-anchor="middle" font-size="10.5" fill="var(--sys-google)">hourly agent — only if</text>
+          <text x="690" y="314" text-anchor="middle" font-size="10.5" fill="var(--sys-google)">the draft was approved</text>
+
+          <path d="M 750 130 C 650 240, 400 280, 180 386" fill="none" stroke="var(--sys-local)" stroke-width="1.5" marker-end="url(#arrow)"/>
+          <text x="420" y="278" text-anchor="middle" font-size="10.5" fill="var(--sys-local)">a new draft also creates</text>
+          <text x="420" y="292" text-anchor="middle" font-size="10.5" fill="var(--sys-local)">one small reminder event</text>
+
+          <line x1="260" y1="420" x2="686" y2="420" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 4" marker-end="url(#arrow)"/>
+          <text x="475" y="410" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.55">(you're on both ends)</text>
+
+          <path d="M 795 390 C 795 300, 795 220, 795 134" fill="none" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)"/>
+          <text x="870" y="270" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.8">approve /</text>
+          <text x="870" y="284" text-anchor="middle" font-size="10.5" fill="currentColor" opacity="0.8">resolve a task</text>
+        </svg>
+        <figcaption>Nothing left of the database box ever writes to the live calendar on its own. Every agent drafts; approval is the only thing that lets anything become real.</figcaption>
+      </figure>
+
+      <p>The database also holds an open-ended task list with three states — <strong>doing</strong>, <strong>paused</strong> (with an optional return date), and <strong>done</strong> — so anything discretionary has a real way to be deferred on purpose instead of nagging forever or vanishing without a trace.</p>
+
+      <p>Notification is the one place where the design changed the most. The first version tried a custom push service; it silently failed on scheduled runs more than once with no visible error. The current version has a drafting agent create one small calendar event whose only job is to trigger the calendar app's own native reminder — the same reliable notification you already get for any other event — and a cleanup pass removes it once that plan's been reviewed. No custom relay, no new failure mode.</p>
+    </section>
+
+    <section class="part" id="lessons">
+      <div class="part-kicker">Lessons</div>
+      <h2 class="part-title">What actually mattered, building this</h2>
+
+      <div class="lesson">
+        <div class="num">01</div>
+        <div><h4>A sandboxed agent's network is smaller than you'd guess</h4><p>Scheduled cloud agents often run with a fixed outbound network allowlist — a handful of known hosts, nothing else. A clever webhook or push service you'd reach for locally may simply be unreachable from that environment, and it fails quietly rather than with an obvious error. Check what's actually reachable before designing around a service you haven't tested from inside the sandbox itself.</p></div>
+      </div>
+
+      <div class="lesson">
+        <div class="num">02</div>
+        <div><h4>"Success" isn't the same as "delivered"</h4><p>A notification call can return a clean success response and still never reach the device it was meant for. If a channel matters, verify delivery end to end at least once — don't trust the API response alone.</p></div>
+      </div>
+
+      <div class="lesson">
+        <div class="num">03</div>
+        <div><h4>Default reminders assume the future</h4><p>A calendar event with a default "30 minutes before" reminder never fires if the event starts right now — that trigger point is already in the past by the time the event exists. Any reminder meant to be immediate needs an explicit override, not the default.</p></div>
+      </div>
+
+      <div class="lesson">
+        <div class="num">04</div>
+        <div><h4>Keep a changelog for systems that build themselves over time</h4><p>A system that grows in small increments over weeks is easy to lose track of — which fix superseded which, and why. A short dated history, kept alongside the system itself, turns "wait, didn't we already try that" into a five-second lookup.</p></div>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>This is a personal project, described here in general terms — the specific calendars, databases, and scripts it runs on aren't included. Built and maintained with Claude Code.</p>
+    <div class="sig mono">Updated September 2026</div>
+  </div>
+</footer>
+
+</body>
+</html>
